@@ -1,66 +1,106 @@
 cmake_minimum_required(VERSION 2.8)
 
-set(CMAKE_SYSTEM_NAME "Generic")
-set(CMAKE_C_COMPILER "arm-vita-eabi-gcc")
-set(CMAKE_CXX_COMPILER "arm-vita-eabi-g++")
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  if(DEFINED ENV{VITASDK})
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE PATH "toolchain file")
+  else()
+    message(FATAL_ERROR "Please define VITASDK to point to your SDK path!")
+  endif()
+endif()
 
 project(HENkaku)
+include("${VITASDK}/share/vita.cmake" REQUIRED)
 
-set(CMAKE_C_FLAGS "-Wl,-q -Wall -O3 -std=gnu99")
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -std=c++11 -fno-rtti -fno-exceptions")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -fshort-wchar -O3 -std=gnu99")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fno-rtti -fno-exceptions")
 
 include_directories(
 )
 
 link_directories(
-	${CMAKE_CURRENT_BINARY_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/henkaku-stubs
 )
 
 if (NOT ${RELEASE})
   add_definitions(-DENABLE_LOGGING)
 endif()
 
-add_executable(user.elf
-	user.c
+# Builds
+function(ADD_RESOURCES out_var)
+  set(result)
+  foreach(in_f ${ARGN})
+    set(out_f "${CMAKE_CURRENT_BINARY_DIR}/${in_f}.o")
+    get_filename_component(out_dir ${out_f} DIRECTORY)
+    add_custom_command(OUTPUT ${out_f}
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${out_dir}
+      COMMAND ${CMAKE_LINKER} -r -b binary -o ${out_f} ${in_f}
+      DEPENDS ${in_f}
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Building resource ${out_f}"
+      VERBATIM
+      )
+    list(APPEND result ${out_f})
+  endforeach()
+  set(${out_var} "${result}" PARENT_SCOPE)
+endfunction()
+
+file(GLOB res_files RELATIVE ${CMAKE_SOURCE_DIR} *.xml)
+add_resources(xml_res ${res_files})
+
+add_executable(user
+  ${xml_res}
+  user.c
 )
 
-add_executable(kernel.elf
-	kernel.c
+add_executable(kernel
+  kernel.c
 )
 
-target_link_libraries(user.elf
+target_link_libraries(user
   taihen_stub
+  HENkaku_stub
   SceLibKernel_stub
   SceIofilemgr_stub
+  SceRegistryMgr_stub
+  ScePower_stub
+  SceVshBridge_stub
 )
 
-target_link_libraries(kernel.elf
-	gcc
+target_link_libraries(kernel
+  gcc
   taihenForKernel_stub
   SceSysmemForDriver_stub
   SceSysclibForDriver_stub
   SceIofilemgrForDriver_stub
   SceDebugForDriver_stub
   SceModulemgrForKernel_stub
+  SceThreadmgrForDriver_stub
 )
 
-set_target_properties(kernel.elf
+add_dependencies(user henkaku-stubs)
+
+set_target_properties(kernel
   PROPERTIES LINK_FLAGS "-nostdlib"
-	COMPILE_FLAGS "-D__VITA_KERNEL__"
+  COMPILE_FLAGS "-D__VITA_KERNEL__"
 )
 
-set_target_properties(user.elf
+set_target_properties(user
   PROPERTIES LINK_FLAGS "-nostdlib"
 )
 
-add_custom_target(henkaku.skprx ALL
-	COMMAND vita-elf-create -e ${CMAKE_SOURCE_DIR}/henkaku.yml kernel.elf kernel.velf ${CMAKE_SOURCE_DIR}/taihen.json
-	COMMAND vita-make-fself kernel.velf henkaku.skprx
+vita_create_self(henkaku.skprx kernel
+  UNSAFE
+  CONFIG ${CMAKE_SOURCE_DIR}/kernel.yml
 )
-add_dependencies(henkaku.skprx kernel.elf)
+vita_create_stubs(henkaku-stubs kernel ${CMAKE_SOURCE_DIR}/kernel.yml
+  KERNEL
+)
+vita_create_self(henkaku.suprx user
+  UNSAFE
+  CONFIG ${CMAKE_SOURCE_DIR}/user.yml
+)
 
-add_custom_target(henkaku.suprx ALL
-	COMMAND vita-elf-create -e ${CMAKE_SOURCE_DIR}/henkaku.yml user.elf user.velf ${CMAKE_SOURCE_DIR}/taihen.json
-	COMMAND vita-make-fself user.velf henkaku.suprx
+install(DIRECTORY ${CMAKE_BINARY_DIR}/henkaku-stubs/
+  DESTINATION lib
+  FILES_MATCHING PATTERN "*.a"
 )
-add_dependencies(henkaku.suprx user.elf)

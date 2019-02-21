@@ -10,12 +10,15 @@
 int sceClibPrintf(const char *fmt, ...);
 int sceClibSnprintf(char *buf, size_t len, const char *fmt, ...);
 
+int henkaku_reload_config(void);
+int taiReloadConfig(void);
+
 /** Logging function */
 #ifdef ENABLE_LOGGING
 #ifdef __VITA_KERNEL__
-#define LOG(fmt, ...) printf("[%s:%d] " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG(fmt, ...) printf("[%s:%d] " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #else
-#define LOG(fmt, ...) sceClibPrintf("[%s:%d] " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG(fmt, ...) sceClibPrintf("[%s:%d] " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #endif
 #else
 #define LOG(fmt, ...)
@@ -32,7 +35,8 @@ typedef struct {
 } __attribute__((packed)) henkaku_config_t;
 
 #define HENKAKU_CONFIG_MAGIC (0x4C434C4D)
-#define CONFIG_PATH "ux0:temp/app_work/MLCL00001/rec/config.bin"
-#define SPOOF_VERSION (0x3610000)
+#define CONFIG_PATH "ur0:tai/henkaku_config.bin"
+#define OLD_CONFIG_PATH "ux0:temp/app_work/MLCL00001/rec/config.bin"
+#define SPOOF_VERSION (0x3650000)
 
 #endif // HENKAKU_HEADER

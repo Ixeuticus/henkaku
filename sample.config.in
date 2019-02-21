@@ -3,30 +3,23 @@
 # whether we're building in debug or release mode, debug has a lot of sceClibPrintf logging, release has none of it
 RELEASE=1
 
-# if specified, use the prebuilt krop.rop instead of building it from source
-KROP_PREBUILT=
-
 # package files will be downloaded from here
 # place these files in the `pkg` directory: eboot.bin, head.bin, param.sfo
 # the directory structure will be created by the exploit
 PKG_URL_PREFIX="http://your_url_here.com/pkg/"
 
-# Args will be appended to the URL, in format "?a1=0x123&a2=0x345"
-# You only need this for the dynamic version of the exploit (which is recommended)
-STAGE2_URL_BASE="http://your_url_here.com/stage2.php"
+# Url to henkaku.bin
+HENKAKU_BIN_URL="http://your_url_here.com/henkaku.bin"
 
 # Version to show in Settings
 HENKAKU_RELEASE=7
 BETA_RELEASE=0
 
-# Version of bundled vitashell pkg
-# When repeatedly executing the exploit, vitashell is only downloaded and installed when SHELL_VERSION is bigger than previous SHELL_VERSION
-# the exploit was run with
-# If VERSION is 0, this is ignored and vitashell is always downloaded and installed
-SHELL_VERSION=0
-
-# Version of taiHEN, set to 0 to always download
-TAIHEN_VERSION=0
-
-# CRC of taiHEN for basic checks, set to 0 to disable checks
+# CRC of taihen.skprx, will redownload if mismatch
 TAIHEN_CRC32=0
+
+# CRC of molecularShell eboot.bin, will redownload if mismatch
+VITASHELL_CRC32=0
+
+# PSN "X-I-5-Passphrase" for spoofing, leave empty to disable
+PSN_PASSPHRASE=""

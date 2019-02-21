@@ -1,5 +1,7 @@
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysmem.h>
+#include <psp2kern/kernel/cpu.h>
+#include <psp2kern/kernel/threadmgr.h>
 #include <psp2kern/io/fcntl.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,6 +10,7 @@
 #include "../build/version.c"
 
 #define OFFSET_PATCH_ARG (168)
+#define OFFSET_PATCH_AUTHID (152)
 
 typedef struct {
   uint32_t magic;                 /* 53434500 = SCE\0 */
@@ -54,9 +57,17 @@ static int parse_headers_patched(int ctx, const void *headers, size_t len, void 
     if (self->appinfo_offset <= len - sizeof(app_info_t)) {
       info = (app_info_t *)(headers + self->appinfo_offset);
       LOG("authid: 0x%llx\n", info->authid);
-      if ((info->authid & 0xFFFFFFFFFFFFFFFDLL) == 0x2F00000000000001LL) {
-        if (config.allow_unsafe_hb) {
+      if (ret < 0 && config.allow_unsafe_hb) {
+        LOG("is homebrew!");
+        if ((info->authid & 0xFFFFFFFFFFFFFFFCLL) == 0x2F00000000000000LL) {
+          if (info->authid & 1) {
+            // we just give extended permissions
+            *(uint32_t *)(args + OFFSET_PATCH_ARG) = 0x40;
+          }
+        } else {
+          // we give authid + extended permissions
           *(uint32_t *)(args + OFFSET_PATCH_ARG) = 0x40;
+          *(uint64_t *)(args + OFFSET_PATCH_AUTHID) = info->authid;
         }
       }
     }
@@ -100,23 +111,28 @@ static int sceKernelGetSystemSwVersion_patched(SceKernelFwInfo *info) {
   return ret;
 }
 
-static tai_hook_ref_t g_SceSblSsUpdateMgr_8E3EC2E1_hook;
-static int SceSblSsUpdateMgr_8E3EC2E1_patched(int r0, uintptr_t out) {
+static tai_hook_ref_t g_sceSblUsGetSpkgInfo_hook;
+static int sceSblUsGetSpkgInfo_patched(int r0, uintptr_t out) {
   int ver;
   int ret;
-  ret = TAI_CONTINUE(int, g_SceSblSsUpdateMgr_8E3EC2E1_hook, r0, out);
-  ver = config.spoofed_version;
-  sceKernelMemcpyKernelToUser(out+4, &ver, 4);
+  ret = TAI_CONTINUE(int, g_sceSblUsGetSpkgInfo_hook, r0, out);
+  if (r0 == 1 || r0 == 9 || r0 == 10 || r0 == 21 || r0 == 22) {
+    ver = config.spoofed_version;
+    ksceKernelMemcpyKernelToUser(out+4, &ver, 4);
+  }
   return ret;
 }
 
 static int load_config_kernel(void) {
   SceUID fd;
   int rd;
-  fd = sceIoOpenForDriver(CONFIG_PATH, SCE_O_RDONLY, 0);
+  fd = ksceIoOpen(CONFIG_PATH, SCE_O_RDONLY, 0);
+  if (fd < 0) {
+    fd = ksceIoOpen(OLD_CONFIG_PATH, SCE_O_RDONLY, 0);
+  }
   if (fd >= 0) {
-    rd = sceIoReadForDriver(fd, &config, sizeof(config));
-    sceIoCloseForDriver(fd);
+    rd = ksceIoRead(fd, &config, sizeof(config));
+    ksceIoClose(fd);
     if (rd == sizeof(config)) {
       if (config.magic == HENKAKU_CONFIG_MAGIC) {
         if (config.version >= 8) {
@@ -143,6 +159,22 @@ static int load_config_kernel(void) {
   return 0;
 }
 
+// user export
+int henkaku_reload_config(void) {
+  int state;
+  int tid;
+  int ret;
+  ENTER_SYSCALL(state);
+  tid = ksceKernelCreateThread("configwrite", (SceKernelThreadEntry)load_config_kernel, 64, 0x1000, 0, 0, NULL);
+  LOG("ksceKernelCreateThread: %x", tid);
+  ret = ksceKernelStartThread(tid, 0, NULL);
+  LOG("ksceKernelStartThread: %x", ret);
+  ksceKernelWaitThreadEnd(tid, &ret, NULL);
+  ksceKernelDeleteThread(tid);
+  EXIT_SYSCALL(state);
+  return ret;
+}
+
 void _start() __attribute__ ((weak, alias ("module_start")));
 int module_start(SceSize argc, const void *args) {
   SceUID shell_pid;
@@ -164,14 +196,13 @@ int module_start(SceSize argc, const void *args) {
                                               0xF8769E86, 
                                               some_sysroot_check_patched);
   LOG("some_sysroot_check_hook: %x", g_hooks[1]);
-  // we remove this because it might not be needed. the branch at the beginning makes substitute fail
-  /*g_hooks[2] = taiHookFunctionExportForKernel(KERNEL_PID, 
+  g_hooks[2] = taiHookFunctionExportForKernel(KERNEL_PID, 
                                               &g_some_process_check_patched_hook, 
                                               "SceSysmem", 
                                               0x63A519E5, // SceSysmemForKernel
                                               0xD514BB56, 
                                               some_process_check_patched);
-  LOG("some_process_check_patched_hook: %x", g_hooks[2]);*/
+  LOG("some_process_check_patched_hook: %x", g_hooks[2]);
   // this hook patches an auth check in ScePower for enabling overclocking in safe homebrew
   g_some_power_auth_check_hook = 0;
   g_hooks[3] = taiHookFunctionImportForKernel(KERNEL_PID, 
@@ -192,12 +223,12 @@ int module_start(SceSize argc, const void *args) {
     LOG("sceKernelGetSystemSwVersion_hook: %x", g_hooks[4]);
     // this hook spoofs the system version for internal access
     g_hooks[5] = taiHookFunctionExportForKernel(KERNEL_PID, 
-                                                &g_SceSblSsUpdateMgr_8E3EC2E1_hook, 
+                                                &g_sceSblUsGetSpkgInfo_hook, 
                                                 "SceSblUpdateMgr", 
                                                 0x31406C49, // SceSblSsUpdateMgr
                                                 0x8E3EC2E1, 
-                                                SceSblSsUpdateMgr_8E3EC2E1_patched);
-    LOG("SceSblSsUpdateMgr_8E3EC2E1_hook: %x", g_hooks[5]);
+                                                sceSblUsGetSpkgInfo_patched);
+    LOG("sceSblUsGetSpkgInfo_hook: %x", g_hooks[5]);
   } else {
     LOG("skipping version spoofing");
   }
@@ -216,11 +247,11 @@ int module_start(SceSize argc, const void *args) {
 int module_stop(SceSize argc, const void *args) {
   taiHookReleaseForKernel(g_hooks[0], g_parse_headers_hook);
   taiHookReleaseForKernel(g_hooks[1], g_some_sysroot_check_hook);
-  //taiHookReleaseForKernel(g_hooks[2], g_some_process_check_patched_hook);
+  taiHookReleaseForKernel(g_hooks[2], g_some_process_check_patched_hook);
   taiHookReleaseForKernel(g_hooks[3], g_some_power_auth_check_hook);
   if (config.use_spoofed_version) {
     taiHookReleaseForKernel(g_hooks[4], g_sceKernelGetSystemSwVersion_hook);
-    taiHookReleaseForKernel(g_hooks[5], g_SceSblSsUpdateMgr_8E3EC2E1_hook);
+    taiHookReleaseForKernel(g_hooks[5], g_sceSblUsGetSpkgInfo_hook);
   }
   return SCE_KERNEL_STOP_SUCCESS;
 }
